@@ -54,10 +54,15 @@
 
 (defn- wrap16 [n] (bit-and n 0xFFFF))
 
+(def ^:private reliable-channels #{:reliable-ordered :reliable-unordered})
+
 (defn send
   "Prepare a packet for sending on `channel`. Returns
-  [wire-bytes updated-manager]."
-  [cm channel payload]
+  [wire-bytes updated-manager]. `now-ms` timestamps the send; required for
+  every channel (not just reliable ones) so callers always pass it the same
+  way, but it's only actually used to queue reliable-channel sends into
+  `:unacked` for retransmit tracking -- :unreliable/:voice ignore it."
+  [cm channel payload now-ms]
   (let [[seq flags cm]
         (case channel
           :unreliable
@@ -75,28 +80,48 @@
           [(:voice-seq cm) #{} (update cm :voice-seq (comp wrap16 inc))])
 
         ack (get (:peer-ack cm) channel 0)
-        pkt (packet/make-packet channel flags seq ack payload)]
-    [(packet/packet->bytes pkt) cm]))
+        pkt (packet/make-packet channel flags seq ack payload)
+        wire (packet/packet->bytes pkt)
+        ;; queue the sent packet into the channel's unacked ring buffer so
+        ;; get-retransmits has something to find -- this was the missing
+        ;; half of the reliable-delivery contract: nothing populated
+        ;; :unacked, so reliable-ordered/reliable-unordered silently
+        ;; degraded to fire-and-forget (identical to :unreliable), and a
+        ;; dropped packet was NEVER retransmitted regardless of how much
+        ;; time passed.
+        cm (if (contains? reliable-channels channel)
+             (update-in cm [channel :unacked] assoc (mod seq send-buffer-size)
+                        {:data wire :sent-at-ms now-ms :retransmit-count 0})
+             cm)]
+    [wire cm]))
 
 (defn receive
   "Process a received wire packet. Returns [[channel payload] updated-manager]
-  or [nil updated-manager] if the bytes didn't parse."
+  or [nil updated-manager] if the bytes didn't parse. For a reliable
+  channel, the incoming packet's own `ack` field acknowledges one of OUR
+  outstanding sends on that same channel (the piggyback-ack pattern every
+  `send` above already builds into the outgoing header via `(peer-ack cm)`)
+  -- clearing that ring-buffer slot from `:unacked` is the other missing
+  half of the reliable-delivery contract: without it, a fix that only
+  populated `:unacked` on send would retransmit every packet forever, even
+  ones the peer already confirmed."
   [cm bytes]
   (if-let [pkt (packet/bytes->packet bytes)]
     (let [channel (packet/header-channel (:header pkt))
           seq (packet/header-sequence (:header pkt))
-          cm' (assoc-in cm [:peer-ack channel] seq)]
+          peer-ack (packet/header-ack (:header pkt))
+          cm' (assoc-in cm [:peer-ack channel] seq)
+          cm' (if (contains? reliable-channels channel)
+                (update-in cm' [channel :unacked] dissoc (mod peer-ack send-buffer-size))
+                cm')]
       [[channel (:payload pkt)] cm'])
     [nil cm]))
 
-(defn get-retransmits
-  "Packets on the reliable-ordered channel whose `sent-at-ms` is older than
-  `ack-timeout-ms` relative to `now-ms`. Returns [wire-bytes-seq updated-manager]
-  with `sent-at-ms`/`retransmit-count` bumped for the ones returned (mirrors
-  the Rust loop over the unacked ring buffer)."
-  [cm now-ms]
-  (let [rc (:reliable-ordered cm)
-        due? (fn [[_ up]] (> (- now-ms (:sent-at-ms up)) ack-timeout-ms))
+(defn- due-retransmits
+  "[due-wire-bytes updated-reliable-channel] for one reliable channel's
+  unacked entries older than ack-timeout-ms."
+  [rc now-ms]
+  (let [due? (fn [[_ up]] (> (- now-ms (:sent-at-ms up)) ack-timeout-ms))
         due (filter due? (:unacked rc))
         result (mapv (fn [[_ up]] (:data up)) due)
         unacked' (reduce (fn [m [seq up]]
@@ -104,6 +129,19 @@
                                               (assoc :sent-at-ms now-ms)
                                               (update :retransmit-count inc))))
                           (:unacked rc)
-                          due)
-        cm' (assoc cm :reliable-ordered (assoc rc :unacked unacked'))]
+                          due)]
+    [result (assoc rc :unacked unacked')]))
+
+(defn get-retransmits
+  "Packets on EITHER reliable channel (reliable-ordered AND
+  reliable-unordered -- both maintain their own :unacked ring buffer) whose
+  `sent-at-ms` is older than `ack-timeout-ms` relative to `now-ms`. Returns
+  [wire-bytes-seq updated-manager] with `sent-at-ms`/`retransmit-count`
+  bumped for the ones returned (mirrors the Rust loop over the unacked ring
+  buffer)."
+  [cm now-ms]
+  (let [[result-ordered rc-ordered'] (due-retransmits (:reliable-ordered cm) now-ms)
+        [result-unordered rc-unordered'] (due-retransmits (:reliable-unordered cm) now-ms)
+        result (into result-ordered result-unordered)
+        cm' (assoc cm :reliable-ordered rc-ordered' :reliable-unordered rc-unordered')]
     [result cm']))

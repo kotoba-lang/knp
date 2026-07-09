@@ -11,11 +11,11 @@
   (testing "each channel keeps its own independent sequence counter"
     (let [cm (channel/channel-manager)
           [b1 cm2] (channel/send cm :unreliable #?(:clj (byte-array [1])
-                                                     :cljs (js/Uint8Array. #js [1])))
+                                                     :cljs (js/Uint8Array. #js [1])) 0)
           [b2 cm3] (channel/send cm2 :unreliable #?(:clj (byte-array [2])
-                                                      :cljs (js/Uint8Array. #js [2])))
+                                                      :cljs (js/Uint8Array. #js [2])) 0)
           [b3 _cm4] (channel/send cm3 :reliable-ordered #?(:clj (byte-array [3])
-                                                             :cljs (js/Uint8Array. #js [3])))]
+                                                             :cljs (js/Uint8Array. #js [3])) 0)]
       (is (not= (vec b1) (vec b2)))
       ;; reliable-ordered starts its own counter at 0, independent of unreliable's count
       (let [[[ch1 _] _] (channel/receive (channel/channel-manager) b1)]
@@ -27,7 +27,7 @@
   (testing "send then receive recovers channel and payload"
     (let [cm (channel/channel-manager)
           payload #?(:clj (byte-array [9 8 7]) :cljs (js/Uint8Array. #js [9 8 7]))
-          [wire cm2] (channel/send cm :voice payload)
+          [wire cm2] (channel/send cm :voice payload 0)
           [[ch recv-payload] cm3] (channel/receive cm2 wire)]
       (is (= :voice ch))
       (is (= [9 8 7] (vec recv-payload)))
@@ -47,3 +47,53 @@
     (let [cm (channel/channel-manager)
           [result _cm2] (channel/get-retransmits cm 1000)]
       (is (= [] result)))))
+
+(defn- bytes= [b1 b2] (= (vec b1) (vec b2)))
+
+(deftest reliable-send-actually-retransmits-after-timeout
+  (testing "a reliable-ordered send is queued into :unacked and IS
+            retransmitted once ack-timeout-ms has elapsed with no ack --
+            regression: send never populated :unacked at all, so
+            reliable-ordered/reliable-unordered silently degraded to
+            fire-and-forget identical to :unreliable"
+    (let [cm (channel/channel-manager)
+          payload #?(:clj (byte-array [42]) :cljs (js/Uint8Array. #js [42]))
+          [wire cm2] (channel/send cm :reliable-ordered payload 1000)]
+      (is (seq (:unacked (:reliable-ordered cm2)))
+          "the sent packet must be queued as unacked")
+      (let [[too-early _] (channel/get-retransmits cm2 1050)]
+        (is (= [] too-early) "no retransmit before ack-timeout-ms elapses"))
+      (let [[due cm3] (channel/get-retransmits cm2 1101)]
+        (is (= 1 (count due)))
+        (is (bytes= wire (first due)) "the retransmitted bytes are the original wire packet")
+        (is (= 1 (:retransmit-count (get (:unacked (:reliable-ordered cm3)) 0)))
+            "retransmit-count is bumped"))))
+  (testing "reliable-unordered also retransmits (get-retransmits used to only
+            ever check reliable-ordered's :unacked, leaving
+            reliable-unordered silently unfixable even after send started
+            populating it)"
+    (let [cm (channel/channel-manager)
+          payload #?(:clj (byte-array [7]) :cljs (js/Uint8Array. #js [7]))
+          [wire cm2] (channel/send cm :reliable-unordered payload 1000)
+          [due _] (channel/get-retransmits cm2 1101)]
+      (is (= 1 (count due)))
+      (is (bytes= wire (first due))))))
+
+(deftest receiving-a-peer-ack-clears-the-unacked-entry
+  (testing "once the peer's own send acknowledges our packet (piggyback ack
+            in the packet header), that packet must stop being a retransmit
+            candidate -- otherwise a fix that only populated :unacked on
+            send (without ever clearing acked entries) would retransmit
+            every packet forever, even ones already confirmed delivered"
+    (let [cm-a (channel/channel-manager)
+          payload-a #?(:clj (byte-array [1]) :cljs (js/Uint8Array. #js [1]))
+          [wire-a cm-a2] (channel/send cm-a :reliable-ordered payload-a 1000)
+          cm-b (channel/channel-manager)
+          [_ cm-b2] (channel/receive cm-b wire-a)
+          payload-b #?(:clj (byte-array [2]) :cljs (js/Uint8Array. #js [2]))
+          [wire-b _cm-b3] (channel/send cm-b2 :reliable-ordered payload-b 1000)
+          [_ cm-a3] (channel/receive cm-a2 wire-b)]
+      (is (= {} (:unacked (:reliable-ordered cm-a3)))
+          "A's send is cleared from :unacked once B's reply acks it")
+      (let [[due _] (channel/get-retransmits cm-a3 1101)]
+        (is (= [] due) "an acked packet is never retransmitted")))))
