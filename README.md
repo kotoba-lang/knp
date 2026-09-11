@@ -28,10 +28,10 @@ The original crate had 9 source files. Only the pure state-machine / wire-format
 ## Layout
 
 ```
-src/knp.cljc           ;; root: re-exports the portable public surface
-src/knp/packet.cljc     ;; wire packet header + payload framing
-src/knp/channel.cljc    ;; 4-channel send/receive/retransmit bookkeeping
-src/knp/session.cljc    ;; handshake state machine + hello/welcome messages
+src/knp.cljk           ;; root: re-exports the portable public surface
+src/knp/packet.cljk     ;; wire packet header + payload framing
+src/knp/channel.cljk    ;; 4-channel send/receive/retransmit bookkeeping
+src/knp/session.cljk    ;; handshake state machine + hello/welcome messages
 ```
 
 Binary encode/decode uses `#?(:clj java.nio.ByteBuffer :cljs js/DataView)` reader
@@ -41,14 +41,14 @@ conditionals to stay portable across JVM and JS.
 
 17 tests / 45 assertions, `clojure -M:test`, 0 failures / 0 errors.
 
-- `test/knp/packet_test.cljc` — ports the original `packet.rs` `#[cfg(test)]` block
+- `test/knp/packet_test.cljk` — ports the original `packet.rs` `#[cfg(test)]` block
   (`header_roundtrip`, `packet_roundtrip`) 1:1, plus channel/flags bit-roundtrip and
   short-input coverage.
-- `test/knp/channel_test.cljc` — new coverage for `knp.channel` (the original
+- `test/knp/channel_test.cljk` — new coverage for `knp.channel` (the original
   `channel.rs` shipped with no unit tests).
-- `test/knp/session_test.cljc` — new coverage for `knp.session` (the original
+- `test/knp/session_test.cljk` — new coverage for `knp.session` (the original
   `session.rs` shipped with no unit tests).
-- `test/knp_test.cljc` — namespace-loads smoke test for the root `knp` namespace and
+- `test/knp_test.cljk` — namespace-loads smoke test for the root `knp` namespace and
   its re-exported surface.
 
 ## Develop
