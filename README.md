@@ -39,7 +39,7 @@ conditionals to stay portable across JVM and JS.
 
 ## Test coverage
 
-17 tests / 45 assertions, `clojure -M:test`, 0 failures / 0 errors.
+17 tests / 45 assertions, `kbb -M:test`, 0 failures / 0 errors.
 
 - `test/knp/packet_test.cljk` — ports the original `packet.rs` `#[cfg(test)]` block
   (`header_roundtrip`, `packet_roundtrip`) 1:1, plus channel/flags bit-roundtrip and
@@ -54,5 +54,5 @@ conditionals to stay portable across JVM and JS.
 ## Develop
 
 ```bash
-clojure -M:test
+kbb -M:test
 ```
