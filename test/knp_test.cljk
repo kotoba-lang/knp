@@ -1,5 +1,5 @@
 (ns knp-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [knp]
             [knp.packet]
             [knp.channel]

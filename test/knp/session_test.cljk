@@ -2,7 +2,7 @@
   "kami-knp/src/session.rs had no `#[cfg(test)]` block in the original Rust.
   These are new coverage for the ported CLJC state machine and handshake
   wire-message framing."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [knp.session :as session]))
 
 (deftest hello-message-shape
