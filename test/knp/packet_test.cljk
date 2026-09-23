@@ -1,7 +1,7 @@
 (ns knp.packet-test
   "Ported 1:1 from kami-knp/src/packet.rs `#[cfg(test)] mod tests`
   (header_roundtrip, packet_roundtrip)."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [knp.packet :as packet]))
 
 (deftest header-roundtrip

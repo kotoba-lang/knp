@@ -4,7 +4,7 @@
   ported CLJC state machine, exercising the same behavior the Rust doc
   comments describe (per-channel sequencing, peer-ack bookkeeping,
   retransmit scheduling)."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [knp.channel :as channel]))
 
 (deftest send-increments-per-channel-sequence
